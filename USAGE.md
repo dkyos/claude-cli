@@ -46,7 +46,7 @@ npm run build
 | `dist/claude-cli.mjs` | **통합 CLI** — `npm link` 대상 |
 | `dist/gemini-login.mjs` | OAuth 로그인 (분리 번들, 단독 실행 가능) |
 | `dist/gemini-chat.mjs` | 채팅 REPL (분리 번들, 단독 실행 가능) |
-| `dist/cli.mjs` | 유출 소스 전체 CLI (`--version`/`--help`만 안정) |
+| `dist/cli.mjs` | 원본 전체 CLI (`--version`/`--help`만 안정) |
 
 ## 2. 인증 — 둘 중 하나 선택
 

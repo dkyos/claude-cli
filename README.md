@@ -1,13 +1,13 @@
-# Claude Code — Gemini Fork (유출 소스 @ 2026-03-31)
+# Claude Code — Gemini Fork
 
-유출된 Claude Code CLI 소스를 Google Gemini API로 재타깃한 fork입니다.
+Claude Code CLI 소스를 Google Gemini API로 재타깃한 fork입니다.
 
 > **fork에서 바뀐 것**
 > - LLM 백엔드: `@anthropic-ai/sdk` 호출을 `@google/genai`로 위임하는 얇은 어댑터로 교체
 > - 인증: Google OAuth (Login with Google) **또는** `GEMINI_API_KEY`. `~/.gemini/oauth_creds.json`은 `gemini-cli`와 호환
 > - OAuth 경로는 Code Assist server(`cloudcode-pa.googleapis.com`) 경유 — `gemini-cli`의 `LOGIN_WITH_GOOGLE` 인증과 같은 방식
 > - 3P provider(AWS Bedrock, Azure Foundry, Anthropic-on-Vertex) 제거
-> - 빌드 시스템: 유출 소스는 그대로 빌드 안 됨 — `package.json`, `tsconfig.json`, esbuild bundler, ~95개 feature-flag-gated 모듈 stub, 그 외 자잘한 패치 추가
+> - 빌드 시스템: 원본 소스는 그대로 빌드 안 됨 — `package.json`, `tsconfig.json`, esbuild bundler, ~95개 feature-flag-gated 모듈 stub, 그 외 자잘한 패치 추가
 > - 글로벌 진입점: `claude-cli` 단일 커맨드 (subcommand: `login` / `logout` / `chat` / 기본은 chat)
 
 전체 5-phase 포팅 계획은 `/Users/dkyos/.claude/plans/cli-refactored-pond.md` 참고.
@@ -40,7 +40,7 @@ claude-cli logout                     # 자격증명 전부 삭제
 | `dist/claude-cli.mjs` | ~2.5 MB | **통합 CLI.** `npm link` 대상. subcommand 디스패치 (login/logout/chat) | ✅ 동작 |
 | `dist/gemini-login.mjs` | ~830 KB | OAuth 로그인 단독 번들 | ✅ 동작 |
 | `dist/gemini-chat.mjs` | ~2.4 MB | minimal readline 채팅 REPL 단독 번들 | ✅ 동작 |
-| `dist/cli.mjs` | ~22 MB | 유출 소스 전체 CLI (Ink REPL 포함) | ⚠️ `--version`/`--help`만 안정. REPL 미해결 (아래 참고) |
+| `dist/cli.mjs` | ~22 MB | 원본 전체 CLI (Ink REPL 포함) | ⚠️ `--version`/`--help`만 안정. REPL 미해결 (아래 참고) |
 
 `claude-cli`는 `chat`/`login`/`logout` 모두 한 binary에 통합한 것이고, 나머지 두 분리 번들은 단독 사용용으로 유지.
 
@@ -106,7 +106,7 @@ claude-cli                    # OAuth 토큰 자동 사용
 | `CODE_ASSIST_ENDPOINT` | Code Assist 엔드포인트 (기본 `https://cloudcode-pa.googleapis.com`) |
 | `CODE_ASSIST_API_VERSION` | API 버전 (기본 `v1internal`) |
 | `GEMINI_OAUTH_CLIENT_ID` / `GEMINI_OAUTH_CLIENT_SECRET` | 자체 OAuth 클라이언트 사용 시 |
-| `USE_GEMINI` | `dist/cli.mjs`(유출 소스 전체 CLI) 안에서 Gemini 어댑터 활성화 (`gemini-chat.mjs`/`claude-cli`는 항상 활성) |
+| `USE_GEMINI` | `dist/cli.mjs`(원본 전체 CLI) 안에서 Gemini 어댑터 활성화 (`gemini-chat.mjs`/`claude-cli`는 항상 활성) |
 | `CLAUDE_FORK_VERSION` | fork 버전 문자열 (기본 `99.0.0-fork`, server-side `assertMinVersion` 우회 목적) |
 | `CLAUDE_FEATURE_<NAME>` | `feature()` 플래그 런타임 활성화 |
 
@@ -148,9 +148,9 @@ scripts/
 └── missing-modules.json                  외부 3P SDK 가상 stub 목록
 ```
 
-## 빌드 인프라 (유출본에 없던 것)
+## 빌드 인프라 (원본에 없던 것)
 
-유출 소스는 빌드 환경이 통째로 빠져 있어 추가:
+원본 소스는 빌드 환경이 통째로 빠져 있어 추가:
 
 - `package.json` — ~70개 의존성 (Bun-specific은 Node 호환으로 대체)
 - `tsconfig.json` — `src/*` paths + `bun:bundle`/내부 `@ant/*`/NAPI 바인딩 alias
@@ -158,11 +158,11 @@ scripts/
 - `src/utils/feature.ts` — `bun:bundle.feature()` 런타임 stub (env-var 조회, default `false`)
 - `src/utils/stubs/*.ts` — 12개 내부/네이티브 패키지 stub (`@ant/computer-use-*`, `@anthropic-ai/sandbox-runtime`, `*-napi`, `react/compiler-runtime`, `bun:ffi`)
 - 자동 생성 ~95개 stub 파일 — feature 플래그 뒤에서 dead-code였던 모듈들 (`src/services/compact/snipCompact.ts`, `src/coordinator/workerAgent.ts` 등)
-- `void main()` `src/main.tsx` 마지막 줄 — 진입점 호출이 유출본에 통째로 빠져 있어 추가
+- `void main()` `src/main.tsx` 마지막 줄 — 진입점 호출이 원본에 통째로 빠져 있어 추가
 
 ## REPL 상태
 
-유출 소스의 Ink REPL은 Anthropic이 자체 vendoring한 `react-reconciler` 빌드 + React 19 기능(`useEffectEvent`, React Compiler 슬롯 캐싱, `updateContainerSync`)을 사용. 공개된 매칭 버전을 핀하면 깔끔하지 않은데, Ink 5는 React 18 peer dep이라 React 19 hook을 위에 얹으면 mismatch 연쇄가 발생:
+원본 Ink REPL은 Anthropic이 자체 vendoring한 `react-reconciler` 빌드 + React 19 기능(`useEffectEvent`, React Compiler 슬롯 캐싱, `updateContainerSync`)을 사용. 공개된 매칭 버전을 핀하면 깔끔하지 않은데, Ink 5는 React 18 peer dep이라 React 19 hook을 위에 얹으면 mismatch 연쇄가 발생:
 
 - `reconciler.updateContainerSync is not a function` → 패치됨 (`src/ink/ink.tsx`에서 `updateContainer` fallback)
 - `getCurrentEventPriority is not a function` → 패치됨 (`src/ink/reconciler.ts`에 stub 추가)
@@ -191,6 +191,6 @@ scripts/
 - AI 에이전트용 코드 가이드: [CLAUDE.md](./CLAUDE.md)
 - 5-phase 포팅 계획: `/Users/dkyos/.claude/plans/cli-refactored-pond.md`
 
-## 원본 disclaimer
+## Disclaimer
 
-이 저장소는 2026-03-31 Anthropic의 npm registry에서 유출된 소스 코드를 보관합니다. 모든 원본 소스 코드는 [Anthropic](https://www.anthropic.com)의 자산입니다.
+원본 Claude Code 소스 코드의 저작권은 [Anthropic](https://www.anthropic.com)에 있습니다. 이 fork는 학습 및 실험 목적의 비상업적 작업입니다.
