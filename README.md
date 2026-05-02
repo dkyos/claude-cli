@@ -1,491 +1,196 @@
-# Claude Code — Gemini Fork (Leaked Source @ 2026-03-31)
+# Claude Code — Gemini Fork (유출 소스 @ 2026-03-31)
 
-This repository is a fork of the leaked Claude Code CLI source that swaps the
-LLM and authentication layers for Google's Gemini API.
+유출된 Claude Code CLI 소스를 Google Gemini API로 재타깃한 fork입니다.
 
-> **What changed in the fork**
-> - LLM backend: `@anthropic-ai/sdk` calls go through a thin adapter wrapping `@google/genai`
-> - Auth: Google OAuth (Login with Google) **or** `GEMINI_API_KEY`, compatible with `~/.gemini/oauth_creds.json`
-> - 3P providers (AWS Bedrock, Azure Foundry, Anthropic-on-Vertex) removed
-> - Build system: leaked source isn't buildable as-is — added `package.json`, `tsconfig.json`, esbuild bundler, ~95 stub files for feature-flag-gated modules, and miscellaneous patches
->
-> See `/Users/dkyos/.claude/plans/cli-refactored-pond.md` for the full porting plan.
+> **fork에서 바뀐 것**
+> - LLM 백엔드: `@anthropic-ai/sdk` 호출을 `@google/genai`로 위임하는 얇은 어댑터로 교체
+> - 인증: Google OAuth (Login with Google) **또는** `GEMINI_API_KEY`. `~/.gemini/oauth_creds.json`은 `gemini-cli`와 호환
+> - OAuth 경로는 Code Assist server(`cloudcode-pa.googleapis.com`) 경유 — `gemini-cli`의 `LOGIN_WITH_GOOGLE` 인증과 같은 방식
+> - 3P provider(AWS Bedrock, Azure Foundry, Anthropic-on-Vertex) 제거
+> - 빌드 시스템: 유출 소스는 그대로 빌드 안 됨 — `package.json`, `tsconfig.json`, esbuild bundler, ~95개 feature-flag-gated 모듈 stub, 그 외 자잘한 패치 추가
+> - 글로벌 진입점: `claude-cli` 단일 커맨드 (subcommand: `login` / `logout` / `chat` / 기본은 chat)
+
+전체 5-phase 포팅 계획은 `/Users/dkyos/.claude/plans/cli-refactored-pond.md` 참고.
 
 ---
 
-## Quick start
+## 빠른 시작 — `npm link`로 글로벌 설치 (권장)
 
 ```sh
+git clone git@github.com:dkyos/claude-cli.git
+cd claude-cli
 npm install --legacy-peer-deps
 npm run build
+npm link                              # claude-cli를 글로벌 PATH에 등록
+
+claude-cli login                      # 1회: Google OAuth (브라우저 자동 오픈)
+claude-cli                            # 어디서든 채팅 시작
+claude-cli --model gemini-2.0-flash   # 가벼운 모델로
+claude-cli logout                     # 자격증명 전부 삭제
 ```
 
-This produces three executables in `dist/`:
+해제: `npm unlink -g claude-cli-gemini-fork` 또는 저장소 디렉터리에서 `npm unlink`.
 
-| Bundle | Purpose | Status |
-|---|---|---|
-| `dist/gemini-login.mjs` (~830 KB) | Google OAuth login flow → `~/.gemini/oauth_creds.json` | ✅ working |
-| `dist/gemini-chat.mjs` (~2.4 MB) | **Minimal terminal chat REPL.** No Ink/React UI — just `readline` + Gemini adapter + streaming output | ✅ working |
-| `dist/cli.mjs` (~22 MB) | Full Ink-based REPL from the leaked source | ⚠️ partially working — see "REPL status" below |
+## 빌드 산출물
 
-### Recommended: minimal chat REPL
+`npm run build` 실행 시 `dist/`에 4개 번들:
 
-```sh
-# OAuth (one-time login)
-node dist/gemini-login.mjs
+| 파일 | 크기 | 용도 | 상태 |
+|---|---|---|---|
+| `dist/claude-cli.mjs` | ~2.5 MB | **통합 CLI.** `npm link` 대상. subcommand 디스패치 (login/logout/chat) | ✅ 동작 |
+| `dist/gemini-login.mjs` | ~830 KB | OAuth 로그인 단독 번들 | ✅ 동작 |
+| `dist/gemini-chat.mjs` | ~2.4 MB | minimal readline 채팅 REPL 단독 번들 | ✅ 동작 |
+| `dist/cli.mjs` | ~22 MB | 유출 소스 전체 CLI (Ink REPL 포함) | ⚠️ `--version`/`--help`만 안정. REPL 미해결 (아래 참고) |
 
-# Chat
-node dist/gemini-chat.mjs                         # uses ~/.gemini/oauth_creds.json
-node dist/gemini-chat.mjs --model gemini-2.0-flash
-GEMINI_API_KEY=AIzaSy... node dist/gemini-chat.mjs
+`claude-cli`는 `chat`/`login`/`logout` 모두 한 binary에 통합한 것이고, 나머지 두 분리 번들은 단독 사용용으로 유지.
 
-# Inside the REPL:
-#   /help              list commands
-#   /model gemini-2.5-flash    switch model
-#   /system "you are…" set system prompt
-#   /clear             reset conversation
-#   /exit              quit
-#   Ctrl+C             cancel current response (keeps the session alive)
-#   Ctrl+D             quit
-```
+## 인증 방식
 
-This bypasses every React/Ink/Yoga dependency. It's purely:
-1. `readline` for input
-2. `getAnthropicClient()` → Gemini adapter (API key or OAuth → Code Assist)
-3. `messages.create({stream: true})` → write `text_delta` tokens to stdout
+### 옵션 A: API key (가장 간단)
 
-### Full REPL (experimental)
-
-```sh
-USE_GEMINI=true GEMINI_API_KEY=<your-key> node dist/cli.mjs --help
-USE_GEMINI=true node dist/cli.mjs        # uses ~/.gemini/oauth_creds.json
-```
-
-`--version`/`--help` work. The interactive REPL (`node dist/cli.mjs` with no
-flags) currently fails inside Ink rendering — see "REPL status" below.
-
-### Current recommendation: API key
-
-Get a key from [Google AI Studio](https://aistudio.google.com/app/apikey),
-then either set it in env or write it to a file:
+[Google AI Studio](https://aistudio.google.com/app/apikey)에서 발급 후:
 
 ```sh
 mkdir -p ~/.gemini
-echo "YOUR_AISTUDIO_KEY" > ~/.gemini/.api_key && chmod 600 ~/.gemini/.api_key
-USE_GEMINI=true node dist/cli.mjs --help
+echo "AIzaSy..." > ~/.gemini/.api_key && chmod 600 ~/.gemini/.api_key
+claude-cli                                # 자동으로 키 사용
 ```
 
-### OAuth login (Login with Google)
+또는 환경변수: `GEMINI_API_KEY=AIza... claude-cli`
+
+API key는 `generativelanguage.googleapis.com`에 직접 호출.
+
+### 옵션 B: Google OAuth (Login with Google)
 
 ```sh
-node dist/gemini-login.mjs    # writes ~/.gemini/oauth_creds.json
-USE_GEMINI=true node dist/cli.mjs --help
+claude-cli login              # 브라우저 → 동의 → ~/.gemini/oauth_creds.json 저장
+claude-cli                    # OAuth 토큰 자동 사용
 ```
 
-The standalone bundle (`dist/gemini-login.mjs`, ~830 KB) opens Google's
-consent page, captures the auth code on a local callback server, and stores
-credentials at `~/.gemini/oauth_creds.json` (compatible with `gemini-cli`).
-Refresh tokens are rotated automatically — the OAuth2Client emits a `tokens`
-event on every refresh and the handler in `src/services/auth/gemini/oauth.ts`
-re-saves the file in place.
+**OAuth 경로의 동작 원리**: gemini-cli의 OAuth 클라이언트는 `cloud-platform`/`userinfo.email`/`userinfo.profile` scope만 허가받았고 `generative-language`는 **없음**. 따라서 access token으로 `generativelanguage.googleapis.com` 직접 호출은 거부됩니다 (gemini-cli도 동일). 대신 모든 호출을 **Code Assist server**(`cloudcode-pa.googleapis.com/v1internal:METHOD`) 경유 — `gemini-cli`의 `LOGIN_WITH_GOOGLE` 인증과 같은 흐름. 첫 호출에서 `loadCodeAssist`+`onboardUser`로 사용자 tier/project를 자동 등록하고 결과를 `~/.gemini/code_assist_user.json`에 캐싱.
 
-**Behind the scenes — Code Assist server:** the OAuth client we share with
-`gemini-cli` is approved only for the `cloud-platform`, `userinfo.email`,
-and `userinfo.profile` scopes, **not** `generative-language`. That means the
-access token can't talk to `generativelanguage.googleapis.com` (which
-expects API-key auth). Instead, OAuth requests are routed through Google's
-**Code Assist server** at `cloudcode-pa.googleapis.com/v1internal:METHOD` —
-the same endpoint `gemini-cli` uses for `LOGIN_WITH_GOOGLE`.
+자격증명 파일은 gemini-cli와 호환 — 이미 `gemini-cli`로 로그인했다면 이 단계 생략 가능.
 
-The Code Assist adapter lives in `src/services/api/gemini-adapter/`:
-- `codeAssistServer.ts` — minimal HTTP client (~160 LOC) for the
-  `loadCodeAssist`, `onboardUser`, `generateContent`,
-  `streamGenerateContent` (SSE), `countTokens` methods
-- `codeAssistConverter.ts` — wraps/unwraps the standard Gemini request as
-  `{ model, project, request: { contents, ... } }`
-- `codeAssistSetup.ts` — on first OAuth use, calls `loadCodeAssist` to
-  resolve the user's tier and Cloud project ID (auto-onboarding to the
-  free tier if no project is set), caches the result at
-  `~/.gemini/code_assist_user.json`
+### 인증 우선순위 (`getAnthropicClient()`가 사용)
 
-`GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT_ID` env vars override the
-auto-resolved project. Endpoint is overridable via `CODE_ASSIST_ENDPOINT`
-and `CODE_ASSIST_API_VERSION` (matching `gemini-cli`'s knobs).
+1. 명시적으로 전달된 `apiKey` 인자
+2. `GEMINI_API_KEY` 환경변수
+3. `GOOGLE_API_KEY` 환경변수
+4. `~/.gemini/.api_key` 파일
+5. `~/.gemini/oauth_creds.json` (OAuth → Code Assist)
 
-**Auth-resolution priority** in `getAnthropicClient()`:
-1. `apiKey` arg explicitly passed in
-2. `GEMINI_API_KEY` env var
-3. `GOOGLE_API_KEY` env var
-4. `~/.gemini/.api_key` file
-5. `~/.gemini/oauth_creds.json` → Code Assist server
+먼저 발견되는 것 사용. 모두 없으면 명확한 에러 메시지.
 
-API-key paths talk to `generativelanguage.googleapis.com` directly via
-`@google/genai`. OAuth path goes through Code Assist.
+## 모델 매핑
 
-The leaked source's in-REPL `/login` slash command is wired to Anthropic's
-own OAuth UI and is **not** redirected to this flow — use the standalone
-`dist/gemini-login.mjs` instead.
+`--model <name>`에 어떤 이름을 넣어도 자동으로 Gemini로 매핑됩니다 (`src/services/api/gemini-adapter/modelMap.ts`):
 
-## Environment variables
-
-| Variable | Effect |
-|---|---|
-| `USE_GEMINI=true` | Route LLM calls through the Gemini adapter (required) |
-| `GEMINI_API_KEY` | Direct API-key auth (highest priority) |
-| `GOOGLE_API_KEY` | Alias for `GEMINI_API_KEY` (same shape gemini-cli accepts) |
-| `CLAUDE_FORK_VERSION` | Override fork version string (default `99.0.0-fork`, intentionally above any server `assertMinVersion`) |
-| `CLAUDE_FEATURE_<NAME>` | Enable a `feature()` flag at runtime (replaces Bun bundler dead-code elimination) |
-
-3P provider env vars (`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_FOUNDRY`,
-`CLAUDE_CODE_USE_VERTEX`) are now an explicit error.
-
-## Model mapping
-
-The Gemini adapter remaps Anthropic model strings to Gemini equivalents:
-
-| Anthropic input | Gemini target |
+| 입력 | 호출되는 Gemini 모델 |
 |---|---|
 | `opus`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-3-7-sonnet-*` | `gemini-2.5-pro` |
 | `sonnet`, `claude-sonnet-4-6`, `claude-sonnet-4-5` | `gemini-2.5-pro` |
 | `haiku`, `claude-haiku-4-5`, `claude-3-5-haiku-*` | `gemini-2.0-flash` |
-| `gemini-*` | passes through unchanged |
+| `gemini-*` | 그대로 통과 |
+| 그 외 | `gemini-2.5-pro` (기본값) |
 
-Pricing for Gemini 2.5 Pro / 2.5 Flash / 2.0 Flash is in
-`src/utils/modelCost.ts` (`COST_GEMINI_*`).
+가격 데이터는 `src/utils/modelCost.ts`의 `COST_GEMINI_25_PRO` / `COST_GEMINI_25_FLASH` / `COST_GEMINI_20_FLASH`.
 
-## Architecture of the swap
+## 환경변수
 
-```
-src/services/api/gemini-adapter/   ← Anthropic-shape adapter wrapping @google/genai
-├── client.ts                       (Anthropic.beta.messages.create / countTokens / models.list)
-├── messageTranslator.ts            MessageParam[]   ↔ Gemini Content[]
-├── toolTranslator.ts               BetaToolUnion[]  → FunctionDeclaration[]
-├── responseTranslator.ts           GenerateContentResponse → BetaMessage  (non-streaming)
-├── streamTranslator.ts             AsyncGenerator   → Anthropic stream events
-├── stopReasonMap.ts                finishReason     → stop_reason
-├── errorWrapper.ts                 Gemini errors    → APIError / 529 / APIUserAbortError
-└── modelMap.ts                     Anthropic alias  → Gemini model name
-
-src/services/auth/gemini/          ← OAuth + API-key resolver
-├── apiKey.ts                       env / ~/.gemini/.api_key
-├── credentials.ts                  ~/.gemini/oauth_creds.json (gemini-cli compatible)
-├── oauth.ts                        loopback-redirect PKCE flow + automatic refresh
-└── index.ts                        getGeminiCredentials / ensureFreshCredentials / loginWithGoogle
-
-src/services/api/client.ts          getAnthropicClient() — first branch on USE_GEMINI=true
-src/services/api/claude.ts          one-line patch at content_block_start tool_use to
-                                     accept already-complete input objects (Gemini delivers
-                                     functionCall args in one chunk, no input_json_delta stream)
-src/utils/auth.ts                   getAnthropicApiKey / isClaudeAISubscriber /
-                                     checkAndRefreshOAuthTokenIfNeeded short-circuit on USE_GEMINI
-```
-
-## Build infrastructure (didn't ship in the leak)
-
-The leaked source has no `package.json`, no `tsconfig.json`, and no build
-script. Added in this fork:
-
-- `package.json` — ~70 dependencies (Bun-only ones replaced with Node-compatible alternatives)
-- `tsconfig.json` — paths for `src/*` plus aliases for `bun:bundle`, internal `@ant/*`, NAPI bindings
-- `scripts/build.mjs` — esbuild-based bundler. Replaces `MACRO.*` build-time constants via `define`. Virtualizes the unavailable `@anthropic-ai/{bedrock,foundry,vertex}-sdk`, `@aws-sdk/*`, `@azure/identity`, `@opentelemetry/exporter-*` SDKs (listed in `scripts/missing-modules.json`)
-- `src/utils/feature.ts` — `bun:bundle.feature()` runtime stub (env-var lookup; default false)
-- `src/utils/stubs/*.ts` — 12 internal/native package stubs (`@ant/computer-use-*`, `@anthropic-ai/sandbox-runtime`, `*-napi`, `react/compiler-runtime`, `bun:ffi`)
-- ~95 auto-generated stub files for feature-flag-gated modules that didn't ship in the leak (`src/services/compact/snipCompact.ts`, `src/coordinator/coordinatorMode.ts`, etc.)
-- `void main()` appended to `src/main.tsx` — the entry-point invocation was missing entirely from the leaked source
-
-The bundle is ~22 MB ESM with sourcemaps. `node dist/cli.mjs --version`
-prints `99.0.0-fork (Claude Code)`.
-
-## REPL status
-
-The leaked source's REPL was built against an internal Anthropic-vendored
-build of `react-reconciler` plus React 19 features (`useEffectEvent`, the
-React Compiler runtime's slot caching, `updateContainerSync`). Pinning to
-the matching public versions doesn't work cleanly because Ink 5 has a
-React 18 peer dep, so layering the React 19 hooks on top creates a chain
-of mismatch errors:
-
-- `reconciler.updateContainerSync is not a function` → patched (fall back to `updateContainer` in `src/ink/ink.tsx`)
-- `getCurrentEventPriority is not a function` → patched (added stubs to `src/ink/reconciler.ts`)
-- `useEffectEvent is not a function` → patched (polyfill in `src/utils/stubs/react-useeffectevent-polyfill.ts` + import-rewrite in `AppState.tsx` / `BackgroundTasksDialog.tsx`)
-- `Objects are not valid as a React child` (suspected: React Compiler slot sentinel leaking into children) → **not fixed**
-
-After fixes 1–3, `node dist/cli.mjs` reaches Ink render and emits ANSI
-escapes, but throws on the fourth issue before showing a prompt. Two
-plausible paths forward:
-
-1. Replace `react/compiler-runtime` stub's sentinel with `null` and hope the
-   compiled code tolerates it (each cache slot is checked before write).
-2. Switch the dependency tree to React 19 + a forked Ink (or `@inkjs/ink`
-   experimental React 19 builds), accepting the larger churn.
-
-For now, **`dist/gemini-chat.mjs` is the supported way to actually use the
-fork interactively** — the rendering layer is the only blocker, and it's
-sidestepped entirely by the minimal REPL.
-
-## Known limitations
-
-- Prompt caching: Anthropic `cache_control` blocks are stripped (Gemini API has implicit caching only)
-- Built-in tools: `computer_use`, `text_editor`, server-side `web_search` (Anthropic-specific) are stripped from the tool list
-- Refusal regex matching: `errors.ts` matches Anthropic-shaped error strings; Gemini errors fall to the generic path (UX degraded but functional)
-- `claudeAiLimits` rate-limit dashboard is naturally inert (subscriber check is false)
-- Vertex AI for Gemini is not wired (use API key or OAuth → Code Assist; Vertex would require additional adapter work)
-- `gemini-cli`'s billing / Google One AI credits / `recordCodeAssistMetrics` telemetry / admin-controls / experiments aren't ported — those endpoints are skipped, requests proceed without those features
-
-## Original disclaimer
-
-This repository archives source code that was leaked from Anthropic's npm registry on **2026-03-31**. All original source code is the property of [Anthropic](https://www.anthropic.com).
-
----
-
-## How It Leaked
-
-[Chaofan Shou (@Fried_rice)](https://x.com/Fried_rice) discovered the leak and posted it publicly:
-
-> **"Claude code source code has been leaked via a map file in their npm registry!"**
->
-> — [@Fried_rice, March 31, 2026](https://x.com/Fried_rice/status/2038894956459290963)
-
-The source map file in the published npm package contained a reference to the full, unobfuscated TypeScript source, which was downloadable as a zip archive from Anthropic's R2 storage bucket.
-
----
-
-## Overview
-
-Claude Code is Anthropic's official CLI tool that lets you interact with Claude directly from the terminal to perform software engineering tasks — editing files, running commands, searching codebases, managing git workflows, and more.
-
-This repository contains the leaked `src/` directory.
-
-- **Leaked on**: 2026-03-31
-- **Language**: TypeScript
-- **Runtime**: Bun
-- **Terminal UI**: React + [Ink](https://github.com/vadimdemedes/ink) (React for CLI)
-- **Scale**: ~1,900 files, 512,000+ lines of code
-
----
-
-## Directory Structure
-
-```
-src/
-├── main.tsx                 # Entrypoint (Commander.js-based CLI parser)
-├── commands.ts              # Command registry
-├── tools.ts                 # Tool registry
-├── Tool.ts                  # Tool type definitions
-├── QueryEngine.ts           # LLM query engine (core Anthropic API caller)
-├── context.ts               # System/user context collection
-├── cost-tracker.ts          # Token cost tracking
-│
-├── commands/                # Slash command implementations (~50)
-├── tools/                   # Agent tool implementations (~40)
-├── components/              # Ink UI components (~140)
-├── hooks/                   # React hooks
-├── services/                # External service integrations
-├── screens/                 # Full-screen UIs (Doctor, REPL, Resume)
-├── types/                   # TypeScript type definitions
-├── utils/                   # Utility functions
-│
-├── bridge/                  # IDE integration bridge (VS Code, JetBrains)
-├── coordinator/             # Multi-agent coordinator
-├── plugins/                 # Plugin system
-├── skills/                  # Skill system
-├── keybindings/             # Keybinding configuration
-├── vim/                     # Vim mode
-├── voice/                   # Voice input
-├── remote/                  # Remote sessions
-├── server/                  # Server mode
-├── memdir/                  # Memory directory (persistent memory)
-├── tasks/                   # Task management
-├── state/                   # State management
-├── migrations/              # Config migrations
-├── schemas/                 # Config schemas (Zod)
-├── entrypoints/             # Initialization logic
-├── ink/                     # Ink renderer wrapper
-├── buddy/                   # Companion sprite (Easter egg)
-├── native-ts/               # Native TypeScript utils
-├── outputStyles/            # Output styling
-├── query/                   # Query pipeline
-└── upstreamproxy/           # Proxy configuration
-```
-
----
-
-## Core Architecture
-
-### 1. Tool System (`src/tools/`)
-
-Every tool Claude Code can invoke is implemented as a self-contained module. Each tool defines its input schema, permission model, and execution logic.
-
-| Tool | Description |
+| 변수 | 효과 |
 |---|---|
-| `BashTool` | Shell command execution |
-| `FileReadTool` | File reading (images, PDFs, notebooks) |
-| `FileWriteTool` | File creation / overwrite |
-| `FileEditTool` | Partial file modification (string replacement) |
-| `GlobTool` | File pattern matching search |
-| `GrepTool` | ripgrep-based content search |
-| `WebFetchTool` | Fetch URL content |
-| `WebSearchTool` | Web search |
-| `AgentTool` | Sub-agent spawning |
-| `SkillTool` | Skill execution |
-| `MCPTool` | MCP server tool invocation |
-| `LSPTool` | Language Server Protocol integration |
-| `NotebookEditTool` | Jupyter notebook editing |
-| `TaskCreateTool` / `TaskUpdateTool` | Task creation and management |
-| `SendMessageTool` | Inter-agent messaging |
-| `TeamCreateTool` / `TeamDeleteTool` | Team agent management |
-| `EnterPlanModeTool` / `ExitPlanModeTool` | Plan mode toggle |
-| `EnterWorktreeTool` / `ExitWorktreeTool` | Git worktree isolation |
-| `ToolSearchTool` | Deferred tool discovery |
-| `CronCreateTool` | Scheduled trigger creation |
-| `RemoteTriggerTool` | Remote trigger |
-| `SleepTool` | Proactive mode wait |
-| `SyntheticOutputTool` | Structured output generation |
+| `GEMINI_API_KEY` | API key 인증 (최우선) |
+| `GOOGLE_API_KEY` | API key 별칭 (`gemini-cli`도 동일) |
+| `GEMINI_MODEL` | 기본 모델 오버라이드 (없으면 `gemini-2.5-pro`) |
+| `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT_ID` | OAuth Standard tier에서 명시적 project ID |
+| `CODE_ASSIST_ENDPOINT` | Code Assist 엔드포인트 (기본 `https://cloudcode-pa.googleapis.com`) |
+| `CODE_ASSIST_API_VERSION` | API 버전 (기본 `v1internal`) |
+| `GEMINI_OAUTH_CLIENT_ID` / `GEMINI_OAUTH_CLIENT_SECRET` | 자체 OAuth 클라이언트 사용 시 |
+| `USE_GEMINI` | `dist/cli.mjs`(유출 소스 전체 CLI) 안에서 Gemini 어댑터 활성화 (`gemini-chat.mjs`/`claude-cli`는 항상 활성) |
+| `CLAUDE_FORK_VERSION` | fork 버전 문자열 (기본 `99.0.0-fork`, server-side `assertMinVersion` 우회 목적) |
+| `CLAUDE_FEATURE_<NAME>` | `feature()` 플래그 런타임 활성화 |
 
-### 2. Command System (`src/commands/`)
+3P provider env(`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_VERTEX`)는 이제 명시적 에러를 반환합니다.
 
-User-facing slash commands invoked with `/` prefix.
+## 아키텍처 개요
 
-| Command | Description |
-|---|---|
-| `/commit` | Create a git commit |
-| `/review` | Code review |
-| `/compact` | Context compression |
-| `/mcp` | MCP server management |
-| `/config` | Settings management |
-| `/doctor` | Environment diagnostics |
-| `/login` / `/logout` | Authentication |
-| `/memory` | Persistent memory management |
-| `/skills` | Skill management |
-| `/tasks` | Task management |
-| `/vim` | Vim mode toggle |
-| `/diff` | View changes |
-| `/cost` | Check usage cost |
-| `/theme` | Change theme |
-| `/context` | Context visualization |
-| `/pr_comments` | View PR comments |
-| `/resume` | Restore previous session |
-| `/share` | Share session |
-| `/desktop` | Desktop app handoff |
-| `/mobile` | Mobile app handoff |
+```
+src/services/api/gemini-adapter/         ← Anthropic SDK 모양으로 @google/genai를 래핑
+├── client.ts                             Anthropic.beta.messages.create / countTokens / models.list
+├── messageTranslator.ts                  MessageParam[] ↔ Gemini Content[]
+├── toolTranslator.ts                     BetaToolUnion[] → FunctionDeclaration[]
+├── responseTranslator.ts                 GenerateContentResponse → BetaMessage (비스트리밍)
+├── streamTranslator.ts                   AsyncGenerator → Anthropic 스트림 이벤트
+├── stopReasonMap.ts                      finishReason → stop_reason
+├── errorWrapper.ts                       Gemini 에러 → APIError / 529 / APIUserAbortError
+├── modelMap.ts                           Anthropic 별칭 → Gemini 모델명
+├── codeAssistServer.ts                   cloudcode-pa.googleapis.com HTTP 클라이언트
+├── codeAssistConverter.ts                request 래핑 / response 언래핑
+├── codeAssistSetup.ts                    loadCodeAssist + onboardUser, project ID 캐시
+└── codeAssistTypes.ts                    Code Assist API 타입 정의
 
-### 3. Service Layer (`src/services/`)
+src/services/auth/gemini/                ← OAuth + API key resolver
+├── apiKey.ts                             env / ~/.gemini/.api_key
+├── credentials.ts                        ~/.gemini/oauth_creds.json (gemini-cli 호환)
+├── oauth.ts                              loopback-redirect PKCE flow + 자동 refresh
+└── index.ts                              getGeminiCredentials / ensureFreshCredentials / loginWithGoogle / getOauthClient
 
-| Service | Description |
-|---|---|
-| `api/` | Anthropic API client, file API, bootstrap |
-| `mcp/` | Model Context Protocol server connection and management |
-| `oauth/` | OAuth 2.0 authentication flow |
-| `lsp/` | Language Server Protocol manager |
-| `analytics/` | GrowthBook-based feature flags and analytics |
-| `plugins/` | Plugin loader |
-| `compact/` | Conversation context compression |
-| `policyLimits/` | Organization policy limits |
-| `remoteManagedSettings/` | Remote managed settings |
-| `extractMemories/` | Automatic memory extraction |
-| `tokenEstimation.ts` | Token count estimation |
-| `teamMemorySync/` | Team memory synchronization |
+src/services/api/client.ts                getAnthropicClient() — USE_GEMINI=true 첫 분기
+src/services/api/claude.ts                content_block_start의 tool_use input을 객체로 보존하는 한 줄 패치 (line 1997)
+src/utils/auth.ts                         getAnthropicApiKey / isClaudeAISubscriber / checkAndRefreshOAuthTokenIfNeeded short-circuit
 
-### 4. Bridge System (`src/bridge/`)
-
-A bidirectional communication layer connecting IDE extensions (VS Code, JetBrains) with the Claude Code CLI.
-
-- `bridgeMain.ts` — Bridge main loop
-- `bridgeMessaging.ts` — Message protocol
-- `bridgePermissionCallbacks.ts` — Permission callbacks
-- `replBridge.ts` — REPL session bridge
-- `jwtUtils.ts` — JWT-based authentication
-- `sessionRunner.ts` — Session execution management
-
-### 5. Permission System (`src/hooks/toolPermission/`)
-
-Checks permissions on every tool invocation. Either prompts the user for approval/denial or automatically resolves based on the configured permission mode (`default`, `plan`, `bypassPermissions`, `auto`, etc.).
-
-### 6. Feature Flags
-
-Dead code elimination via Bun's `bun:bundle` feature flags:
-
-```typescript
-import { feature } from 'bun:bundle'
-
-// Inactive code is completely stripped at build time
-const voiceCommand = feature('VOICE_MODE')
-  ? require('./commands/voice/index.js').default
-  : null
+scripts/
+├── build.mjs                             esbuild + 4개 번들 빌드 + chmod +x
+├── claude-cli-entry.ts                   글로벌 binary 진입점, subcommand 디스패치
+├── claude-cli-flows.ts                   runLogin / runLogout / runChat 본체
+├── gemini-login-entry.ts                 독립 OAuth 진입점
+├── gemini-chat-entry.ts                  독립 채팅 REPL 진입점
+└── missing-modules.json                  외부 3P SDK 가상 stub 목록
 ```
 
-Notable flags: `PROACTIVE`, `KAIROS`, `BRIDGE_MODE`, `DAEMON`, `VOICE_MODE`, `AGENT_TRIGGERS`, `MONITOR_TOOL`
+## 빌드 인프라 (유출본에 없던 것)
 
----
+유출 소스는 빌드 환경이 통째로 빠져 있어 추가:
 
-## Key Files in Detail
+- `package.json` — ~70개 의존성 (Bun-specific은 Node 호환으로 대체)
+- `tsconfig.json` — `src/*` paths + `bun:bundle`/내부 `@ant/*`/NAPI 바인딩 alias
+- `scripts/build.mjs` — esbuild 기반 bundler. `MACRO.*` 빌드타임 상수를 `define`으로 주입. `@anthropic-ai/{bedrock,foundry,vertex}-sdk`, `@aws-sdk/*`, `@azure/identity`, `@opentelemetry/exporter-*` 등 사용 안 하는 SDK는 `scripts/missing-modules.json`로 가상화.
+- `src/utils/feature.ts` — `bun:bundle.feature()` 런타임 stub (env-var 조회, default `false`)
+- `src/utils/stubs/*.ts` — 12개 내부/네이티브 패키지 stub (`@ant/computer-use-*`, `@anthropic-ai/sandbox-runtime`, `*-napi`, `react/compiler-runtime`, `bun:ffi`)
+- 자동 생성 ~95개 stub 파일 — feature 플래그 뒤에서 dead-code였던 모듈들 (`src/services/compact/snipCompact.ts`, `src/coordinator/workerAgent.ts` 등)
+- `void main()` `src/main.tsx` 마지막 줄 — 진입점 호출이 유출본에 통째로 빠져 있어 추가
 
-### `QueryEngine.ts` (~46K lines)
+## REPL 상태
 
-The core engine for LLM API calls. Handles streaming responses, tool-call loops, thinking mode, retry logic, and token counting.
+유출 소스의 Ink REPL은 Anthropic이 자체 vendoring한 `react-reconciler` 빌드 + React 19 기능(`useEffectEvent`, React Compiler 슬롯 캐싱, `updateContainerSync`)을 사용. 공개된 매칭 버전을 핀하면 깔끔하지 않은데, Ink 5는 React 18 peer dep이라 React 19 hook을 위에 얹으면 mismatch 연쇄가 발생:
 
-### `Tool.ts` (~29K lines)
+- `reconciler.updateContainerSync is not a function` → 패치됨 (`src/ink/ink.tsx`에서 `updateContainer` fallback)
+- `getCurrentEventPriority is not a function` → 패치됨 (`src/ink/reconciler.ts`에 stub 추가)
+- `useEffectEvent is not a function` → 패치됨 (폴리필 + import-rewrite)
+- `Objects are not valid as a React child` (의심: React Compiler 슬롯 SENTINEL이 children에 누출) → **미해결**
 
-Defines base types and interfaces for all tools — input schemas, permission models, and progress state types.
+3가지 패치 후 `node dist/cli.mjs`는 Ink 렌더에 도달해 ANSI escape를 출력하지만, 4번째 이슈에서 prompt 표시 전에 throw. 두 가지 진행 가능 경로:
 
-### `commands.ts` (~25K lines)
+1. `react/compiler-runtime` stub의 SENTINEL을 `null`로 바꾸고 컴파일된 코드가 견디길 기대 (각 슬롯이 쓰기 전에 체크됨)
+2. 의존성 트리를 React 19 + 호환 Ink 버전으로 전환 (의존성 churn 큼)
 
-Manages registration and execution of all slash commands. Uses conditional imports to load different command sets per environment.
+현재로서는 **`claude-cli` 통합 binary가 fork를 인터랙티브하게 사용하는 지원되는 방법**입니다 — 렌더링 레이어가 유일한 차단 요인이고 minimal REPL이 그것을 통째로 우회.
 
-### `main.tsx`
+## 알려진 제약
 
-Commander.js-based CLI parser + React/Ink renderer initialization. At startup, parallelizes MDM settings, keychain prefetch, and GrowthBook initialization for faster boot.
+- Prompt caching: Anthropic `cache_control` 블록은 strip (Gemini는 implicit caching만)
+- 내장 도구: `computer_use`, `text_editor`, server-side `web_search` (Anthropic 전용) 도구 목록에서 strip
+- Refusal regex 매칭: `errors.ts`의 영어 패턴 30+ 곳은 거의 동작 안 함 → generic fallback
+- `claudeAiLimits` rate-limit 대시보드는 자연스럽게 inert (subscriber check가 false)
+- Vertex AI for Gemini 미연결 (API key 또는 OAuth → Code Assist만; Vertex는 어댑터 추가 작업 필요)
+- gemini-cli의 billing / Google One AI credits / `recordCodeAssistMetrics` telemetry / admin-controls / experiments는 미포팅 — 해당 엔드포인트 호출 생략, 요청은 그 기능 없이 진행
 
----
+## 추가 정보
 
-## Tech Stack
+- 사용법 상세: [USAGE.md](./USAGE.md)
+- AI 에이전트용 코드 가이드: [CLAUDE.md](./CLAUDE.md)
+- 5-phase 포팅 계획: `/Users/dkyos/.claude/plans/cli-refactored-pond.md`
 
-| Category | Technology |
-|---|---|
-| Runtime | [Bun](https://bun.sh) |
-| Language | TypeScript (strict) |
-| Terminal UI | [React](https://react.dev) + [Ink](https://github.com/vadimdemedes/ink) |
-| CLI Parsing | [Commander.js](https://github.com/tj/commander.js) (extra-typings) |
-| Schema Validation | [Zod v4](https://zod.dev) |
-| Code Search | [ripgrep](https://github.com/BurntSushi/ripgrep) (via GrepTool) |
-| Protocols | [MCP SDK](https://modelcontextprotocol.io), LSP |
-| API | [Anthropic SDK](https://docs.anthropic.com) |
-| Telemetry | OpenTelemetry + gRPC |
-| Feature Flags | GrowthBook |
-| Auth | OAuth 2.0, JWT, macOS Keychain |
+## 원본 disclaimer
 
----
-
-## Notable Design Patterns
-
-### Parallel Prefetch
-
-Startup time is optimized by prefetching MDM settings, keychain reads, and API preconnect in parallel — before heavy module evaluation begins.
-
-```typescript
-// main.tsx — fired as side-effects before other imports
-startMdmRawRead()
-startKeychainPrefetch()
-```
-
-### Lazy Loading
-
-Heavy modules (OpenTelemetry ~400KB, gRPC ~700KB) are deferred via dynamic `import()` until actually needed.
-
-### Agent Swarms
-
-Sub-agents are spawned via `AgentTool`, with `coordinator/` handling multi-agent orchestration. `TeamCreateTool` enables team-level parallel work.
-
-### Skill System
-
-Reusable workflows defined in `skills/` and executed through `SkillTool`. Users can add custom skills.
-
-### Plugin Architecture
-
-Built-in and third-party plugins are loaded through the `plugins/` subsystem.
-
----
-
-## Disclaimer
-
-This repository archives source code that was leaked from Anthropic's npm registry on **2026-03-31**. All original source code is the property of [Anthropic](https://www.anthropic.com).
+이 저장소는 2026-03-31 Anthropic의 npm registry에서 유출된 소스 코드를 보관합니다. 모든 원본 소스 코드는 [Anthropic](https://www.anthropic.com)의 자산입니다.
