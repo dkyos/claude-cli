@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM"],
+    "jsx": "react-jsx",
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "src/*": ["./src/*"],
+      "bun:bundle": ["./src/utils/feature.ts"],
+      "bun:ffi": ["./src/utils/bunFfiStub.ts"],
+      "@ant/computer-use-input": ["./src/utils/stubs/ant-computer-use-input.ts"],
+      "@ant/computer-use-mcp": ["./src/utils/stubs/ant-computer-use-mcp.ts"],
+      "@ant/computer-use-swift": ["./src/utils/stubs/ant-computer-use-swift.ts"],
+      "@ant/claude-for-chrome-mcp": ["./src/utils/stubs/ant-claude-for-chrome-mcp.ts"],
+      "@anthropic-ai/sandbox-runtime": ["./src/utils/stubs/ant-sandbox-runtime.ts"],
+      "@anthropic-ai/claude-agent-sdk": ["./src/utils/stubs/ant-claude-agent-sdk.ts"],
+      "@anthropic-ai/mcpb": ["./src/utils/stubs/ant-mcpb.ts"],
+      "color-diff-napi": ["./src/utils/stubs/color-diff-napi.ts"],
+      "audio-capture-napi": ["./src/utils/stubs/audio-capture-napi.ts"],
+      "image-processor-napi": ["./src/utils/stubs/image-processor-napi.ts"],
+      "modifiers-napi": ["./src/utils/stubs/modifiers-napi.ts"],
+      "url-handler-napi": ["./src/utils/stubs/url-handler-napi.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -86,6 +86,34 @@ export const COST_HAIKU_45 = {
   webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
+// Gemini 2.5 Pro: $1.25 input / $10 output per Mtok (≤200k context tier)
+// Source: https://ai.google.dev/gemini-api/docs/pricing
+export const COST_GEMINI_25_PRO = {
+  inputTokens: 1.25,
+  outputTokens: 10,
+  promptCacheWriteTokens: 0,
+  promptCacheReadTokens: 0.31,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
+// Gemini 2.5 Flash: $0.30 input / $2.50 output per Mtok
+export const COST_GEMINI_25_FLASH = {
+  inputTokens: 0.3,
+  outputTokens: 2.5,
+  promptCacheWriteTokens: 0,
+  promptCacheReadTokens: 0.075,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
+// Gemini 2.0 Flash: $0.10 input / $0.40 output per Mtok
+export const COST_GEMINI_20_FLASH = {
+  inputTokens: 0.1,
+  outputTokens: 0.4,
+  promptCacheWriteTokens: 0,
+  promptCacheReadTokens: 0.025,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
 const DEFAULT_UNKNOWN_MODEL_COST = COST_TIER_5_25
 
 /**
@@ -123,6 +151,12 @@ export const MODEL_COSTS: Record<ModelShortName, ModelCosts> = {
     COST_TIER_5_25,
   [firstPartyNameToCanonical(CLAUDE_OPUS_4_6_CONFIG.firstParty)]:
     COST_TIER_5_25,
+  // Gemini fork ratecards. Keys are the canonical model strings the Gemini
+  // adapter routes through (modelMap.ts).
+  'gemini-2.5-pro': COST_GEMINI_25_PRO,
+  'gemini-2.5-flash': COST_GEMINI_25_FLASH,
+  'gemini-2.0-flash': COST_GEMINI_20_FLASH,
+  'gemini-2.0-flash-lite': COST_GEMINI_20_FLASH,
 }
 
 /**

@@ -98,6 +98,35 @@ export async function getAnthropicClient({
   fetchOverride?: ClientOptions['fetch']
   source?: string
 }): Promise<Anthropic> {
+  // Gemini fork: when USE_GEMINI=true the entire 1P/Bedrock/Vertex/Foundry
+  // stack below is bypassed and a thin Anthropic-shape adapter wrapping
+  // @google/genai is returned. The rest of the codebase (claude.ts,
+  // tokenEstimation.ts, sideQuery.ts, modelCapabilities.ts, claudeAiLimits.ts)
+  // calls through to .beta.messages.create / .beta.messages.countTokens /
+  // .models.list — all of which the adapter implements.
+  if (isEnvTruthy(process.env.USE_GEMINI)) {
+    const { GeminiAnthropicAdapter } = await import('./gemini-adapter/index.js')
+    const { loadApiKey } = await import('../auth/gemini/apiKey.js')
+    const { getOauthClient } = await import('../auth/gemini/index.js')
+    // API key takes precedence (simpler, talks to generativelanguage.googleapis.com directly).
+    const directKey =
+      apiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? (await loadApiKey())
+    if (directKey) {
+      return new GeminiAnthropicAdapter({ apiKey: directKey }) as unknown as Anthropic
+    }
+    // Fall back to OAuth → Code Assist server. The OAuth2Client auto-refreshes
+    // tokens; CodeAssistBackend looks up the user's project ID on first call.
+    const oauthClient = await getOauthClient()
+    if (oauthClient) {
+      return new GeminiAnthropicAdapter(
+        { oauthClient },
+        getSessionId(),
+      ) as unknown as Anthropic
+    }
+    throw new Error(
+      'USE_GEMINI=true but no Gemini credentials found. Set GEMINI_API_KEY or run `node dist/gemini-login.mjs`.',
+    )
+  }
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
   const clientApp = process.env.CLAUDE_AGENT_SDK_CLIENT_APP
@@ -150,152 +179,21 @@ export async function getAnthropicClient({
       fetch: resolvedFetch,
     }),
   }
-  if (isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)) {
-    const { AnthropicBedrock } = await import('@anthropic-ai/bedrock-sdk')
-    // Use region override for small fast model if specified
-    const awsRegion =
-      model === getSmallFastModel() &&
-      process.env.ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION
-        ? process.env.ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION
-        : getAWSRegion()
-
-    const bedrockArgs: ConstructorParameters<typeof AnthropicBedrock>[0] = {
-      ...ARGS,
-      awsRegion,
-      ...(isEnvTruthy(process.env.CLAUDE_CODE_SKIP_BEDROCK_AUTH) && {
-        skipAuth: true,
-      }),
-      ...(isDebugToStdErr() && { logger: createStderrLogger() }),
-    }
-
-    // Add API key authentication if available
-    if (process.env.AWS_BEARER_TOKEN_BEDROCK) {
-      bedrockArgs.skipAuth = true
-      // Add the Bearer token for Bedrock API key authentication
-      bedrockArgs.defaultHeaders = {
-        ...bedrockArgs.defaultHeaders,
-        Authorization: `Bearer ${process.env.AWS_BEARER_TOKEN_BEDROCK}`,
-      }
-    } else if (!isEnvTruthy(process.env.CLAUDE_CODE_SKIP_BEDROCK_AUTH)) {
-      // Refresh auth and get credentials with cache clearing
-      const cachedCredentials = await refreshAndGetAwsCredentials()
-      if (cachedCredentials) {
-        bedrockArgs.awsAccessKey = cachedCredentials.accessKeyId
-        bedrockArgs.awsSecretKey = cachedCredentials.secretAccessKey
-        bedrockArgs.awsSessionToken = cachedCredentials.sessionToken
-      }
-    }
-    // we have always been lying about the return type - this doesn't support batching or models
-    return new AnthropicBedrock(bedrockArgs) as unknown as Anthropic
+  // Gemini fork: AWS Bedrock, Azure Foundry, and Anthropic-on-Vertex paths
+  // are intentionally removed. The corresponding SDKs (@anthropic-ai/bedrock-sdk,
+  // @anthropic-ai/foundry-sdk, @anthropic-ai/vertex-sdk, @azure/identity,
+  // @aws-sdk/*) are not bundled. Setting CLAUDE_CODE_USE_BEDROCK,
+  // CLAUDE_CODE_USE_FOUNDRY, or CLAUDE_CODE_USE_VERTEX is now an error.
+  if (
+    isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK) ||
+    isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY) ||
+    isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX)
+  ) {
+    throw new Error(
+      'Bedrock/Foundry/Anthropic-Vertex providers are not supported in the Gemini fork. Use USE_GEMINI=true with GEMINI_API_KEY or run /login.',
+    )
   }
-  if (isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)) {
-    const { AnthropicFoundry } = await import('@anthropic-ai/foundry-sdk')
-    // Determine Azure AD token provider based on configuration
-    // SDK reads ANTHROPIC_FOUNDRY_API_KEY by default
-    let azureADTokenProvider: (() => Promise<string>) | undefined
-    if (!process.env.ANTHROPIC_FOUNDRY_API_KEY) {
-      if (isEnvTruthy(process.env.CLAUDE_CODE_SKIP_FOUNDRY_AUTH)) {
-        // Mock token provider for testing/proxy scenarios (similar to Vertex mock GoogleAuth)
-        azureADTokenProvider = () => Promise.resolve('')
-      } else {
-        // Use real Azure AD authentication with DefaultAzureCredential
-        const {
-          DefaultAzureCredential: AzureCredential,
-          getBearerTokenProvider,
-        } = await import('@azure/identity')
-        azureADTokenProvider = getBearerTokenProvider(
-          new AzureCredential(),
-          'https://cognitiveservices.azure.com/.default',
-        )
-      }
-    }
-
-    const foundryArgs: ConstructorParameters<typeof AnthropicFoundry>[0] = {
-      ...ARGS,
-      ...(azureADTokenProvider && { azureADTokenProvider }),
-      ...(isDebugToStdErr() && { logger: createStderrLogger() }),
-    }
-    // we have always been lying about the return type - this doesn't support batching or models
-    return new AnthropicFoundry(foundryArgs) as unknown as Anthropic
-  }
-  if (isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX)) {
-    // Refresh GCP credentials if gcpAuthRefresh is configured and credentials are expired
-    // This is similar to how we handle AWS credential refresh for Bedrock
-    if (!isEnvTruthy(process.env.CLAUDE_CODE_SKIP_VERTEX_AUTH)) {
-      await refreshGcpCredentialsIfNeeded()
-    }
-
-    const [{ AnthropicVertex }, { GoogleAuth }] = await Promise.all([
-      import('@anthropic-ai/vertex-sdk'),
-      import('google-auth-library'),
-    ])
-    // TODO: Cache either GoogleAuth instance or AuthClient to improve performance
-    // Currently we create a new GoogleAuth instance for every getAnthropicClient() call
-    // This could cause repeated authentication flows and metadata server checks
-    // However, caching needs careful handling of:
-    // - Credential refresh/expiration
-    // - Environment variable changes (GOOGLE_APPLICATION_CREDENTIALS, project vars)
-    // - Cross-request auth state management
-    // See: https://github.com/googleapis/google-auth-library-nodejs/issues/390 for caching challenges
-
-    // Prevent metadata server timeout by providing projectId as fallback
-    // google-auth-library checks project ID in this order:
-    // 1. Environment variables (GCLOUD_PROJECT, GOOGLE_CLOUD_PROJECT, etc.)
-    // 2. Credential files (service account JSON, ADC file)
-    // 3. gcloud config
-    // 4. GCE metadata server (causes 12s timeout outside GCP)
-    //
-    // We only set projectId if user hasn't configured other discovery methods
-    // to avoid interfering with their existing auth setup
-
-    // Check project environment variables in same order as google-auth-library
-    // See: https://github.com/googleapis/google-auth-library-nodejs/blob/main/src/auth/googleauth.ts
-    const hasProjectEnvVar =
-      process.env['GCLOUD_PROJECT'] ||
-      process.env['GOOGLE_CLOUD_PROJECT'] ||
-      process.env['gcloud_project'] ||
-      process.env['google_cloud_project']
-
-    // Check for credential file paths (service account or ADC)
-    // Note: We're checking both standard and lowercase variants to be safe,
-    // though we should verify what google-auth-library actually checks
-    const hasKeyFile =
-      process.env['GOOGLE_APPLICATION_CREDENTIALS'] ||
-      process.env['google_application_credentials']
-
-    const googleAuth = isEnvTruthy(process.env.CLAUDE_CODE_SKIP_VERTEX_AUTH)
-      ? ({
-          // Mock GoogleAuth for testing/proxy scenarios
-          getClient: () => ({
-            getRequestHeaders: () => ({}),
-          }),
-        } as unknown as GoogleAuth)
-      : new GoogleAuth({
-          scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-          // Only use ANTHROPIC_VERTEX_PROJECT_ID as last resort fallback
-          // This prevents the 12-second metadata server timeout when:
-          // - No project env vars are set AND
-          // - No credential keyfile is specified AND
-          // - ADC file exists but lacks project_id field
-          //
-          // Risk: If auth project != API target project, this could cause billing/audit issues
-          // Mitigation: Users can set GOOGLE_CLOUD_PROJECT to override
-          ...(hasProjectEnvVar || hasKeyFile
-            ? {}
-            : {
-                projectId: process.env.ANTHROPIC_VERTEX_PROJECT_ID,
-              }),
-        })
-
-    const vertexArgs: ConstructorParameters<typeof AnthropicVertex>[0] = {
-      ...ARGS,
-      region: getVertexRegionForModel(model),
-      googleAuth,
-      ...(isDebugToStdErr() && { logger: createStderrLogger() }),
-    }
-    // we have always been lying about the return type - this doesn't support batching or models
-    return new AnthropicVertex(vertexArgs) as unknown as Anthropic
-  }
+  // (Bedrock/Foundry/Anthropic-Vertex blocks removed in the Gemini fork.)
 
   // Determine authentication method based on available tokens
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {

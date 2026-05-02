@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.local
+.env.*.local
+
+# Local user state, never commit
+.claude/
+.gemini/
+oauth_creds.json
+*.api_key
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

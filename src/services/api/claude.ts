@@ -1995,15 +1995,30 @@ async function* queryModel(
           case 'content_block_start':
             switch (part.content_block.type) {
               case 'tool_use':
+                // Gemini adapter (USE_GEMINI=true) delivers tool_use blocks
+                // with `input` already populated as a fully-formed object
+                // because @google/genai gives functionCall.args in one chunk
+                // — there is no input_json_delta stream to accumulate.
+                // Anthropic's wire format always has input='' here and uses
+                // content_block_delta(input_json_delta) to fill it. Preserve
+                // the object form when present; else fall back to ''.
                 contentBlocks[part.index] = {
                   ...part.content_block,
-                  input: '',
+                  input:
+                    typeof part.content_block.input === 'object' &&
+                    part.content_block.input !== null
+                      ? part.content_block.input
+                      : '',
                 }
                 break
               case 'server_tool_use':
                 contentBlocks[part.index] = {
                   ...part.content_block,
-                  input: '' as unknown as { [key: string]: unknown },
+                  input:
+                    typeof part.content_block.input === 'object' &&
+                    part.content_block.input !== null
+                      ? (part.content_block.input as { [key: string]: unknown })
+                      : ('' as unknown as { [key: string]: unknown }),
                 }
                 if ((part.content_block.name as string) === 'advisor') {
                   isAdvisorInProgress = true

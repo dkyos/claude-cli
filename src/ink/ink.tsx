@@ -1447,10 +1447,18 @@ export default class Ink {
         </TerminalWriteProvider>
       </App>;
 
-    // @ts-expect-error updateContainerSync exists in react-reconciler but not in @types/react-reconciler
-    reconciler.updateContainerSync(tree, this.container, null, noop);
-    // @ts-expect-error flushSyncWork exists in react-reconciler but not in @types/react-reconciler
-    reconciler.flushSyncWork();
+    // Gemini fork: react-reconciler@0.29 (React 18) doesn't have
+    // updateContainerSync / flushSyncWork — those landed with React 19's
+    // sync work loop. Fall back to updateContainer + an immediate flushSync.
+    // The behavior is equivalent for our use case: render a tree, wait until
+    // commit completes, return.
+    const r: any = reconciler
+    if (typeof r.updateContainerSync === 'function') {
+      r.updateContainerSync(tree, this.container, null, noop)
+      r.flushSyncWork?.()
+    } else {
+      r.updateContainer(tree, this.container, null, noop)
+    }
   }
   unmount(error?: Error | number | null): void {
     if (this.isUnmounted) {
@@ -1514,10 +1522,15 @@ export default class Ink {
       this.drainTimer = null;
     }
 
-    // @ts-expect-error updateContainerSync exists in react-reconciler but not in @types/react-reconciler
-    reconciler.updateContainerSync(null, this.container, null, noop);
-    // @ts-expect-error flushSyncWork exists in react-reconciler but not in @types/react-reconciler
-    reconciler.flushSyncWork();
+    // See note at the other updateContainerSync call above. Same fallback for
+    // unmount: pass null root to detach the tree, flush.
+    const r: any = reconciler
+    if (typeof r.updateContainerSync === 'function') {
+      r.updateContainerSync(null, this.container, null, noop)
+      r.flushSyncWork?.()
+    } else {
+      r.updateContainer(null, this.container, null, noop)
+    }
     instances.delete(this.options.stdout);
 
     // Free the root yoga node, then clear its reference. Children are already

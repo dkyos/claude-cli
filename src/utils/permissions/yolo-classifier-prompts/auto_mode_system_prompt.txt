@@ -1,0 +1,1 @@
+<!-- stubbed: ./yolo-classifier-prompts/auto_mode_system_prompt.txt -->

@@ -212,6 +212,14 @@ export type ApiKeySource =
   | 'none'
 
 export function getAnthropicApiKey(): null | string {
+  // Gemini fork: when USE_GEMINI=true, callers want a non-null sentinel so
+  // the rest of the codebase treats auth as "present" and proceeds to the
+  // adapter (which actually resolves Gemini creds). The sentinel string is
+  // never sent on the wire — getAnthropicClient() returns the adapter
+  // before the SDK tries to read it.
+  if (isEnvTruthy(process.env.USE_GEMINI)) {
+    return process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || 'gemini-fork-placeholder'
+  }
   const { key } = getAnthropicApiKeyWithSource()
   return key
 }
@@ -1428,6 +1436,12 @@ export function checkAndRefreshOAuthTokenIfNeeded(
   retryCount = 0,
   force = false,
 ): Promise<boolean> {
+  // Gemini fork: Anthropic OAuth refresh is a no-op. Gemini token refresh
+  // happens inside the adapter via auth/gemini/oauth.ts before each request
+  // — that path doesn't go through here.
+  if (isEnvTruthy(process.env.USE_GEMINI)) {
+    return Promise.resolve(true)
+  }
   // Deduplicate concurrent non-retry, non-force calls
   if (retryCount === 0 && !force) {
     if (pendingRefreshCheck) {
@@ -1562,6 +1576,12 @@ async function checkAndRefreshOAuthTokenIfNeededImpl(
 }
 
 export function isClaudeAISubscriber(): boolean {
+  // Gemini fork: never treat the user as a Claude.ai subscriber. The flag
+  // gates Anthropic-specific server features (rate-limit dashboard, beta
+  // headers, OAuth token attachment) that don't apply to Gemini.
+  if (isEnvTruthy(process.env.USE_GEMINI)) {
+    return false
+  }
   if (!isAnthropicAuthEnabled()) {
     return false
   }

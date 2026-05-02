@@ -409,6 +409,17 @@ const reconciler = createReconciler<
   cancelTimeout: clearTimeout,
   noTimeout: -1,
   getCurrentUpdatePriority: () => dispatcher.currentUpdatePriority,
+  // Gemini fork: react-reconciler@0.29 (React 18) requires this hostConfig
+  // method but the leaked source omitted it (Anthropic's vendored reconciler
+  // version had a different shape). Returning DefaultEventPriority (16) is the
+  // safe fallback — no concurrent-priority handling, scheduler treats all
+  // updates as default priority. Equivalent to React 18's behavior outside of
+  // explicit transitions, which Ink doesn't use anyway.
+  getCurrentEventPriority: () => 16,
+  setCurrentUpdatePriority: (priority: number) => {
+    dispatcher.currentUpdatePriority = priority as unknown as typeof dispatcher.currentUpdatePriority
+  },
+  resolveUpdatePriority: () => dispatcher.currentUpdatePriority || 16,
   beforeActiveInstanceBlur() {},
   afterActiveInstanceBlur() {},
   detachDeletedInstance() {},
