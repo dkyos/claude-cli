@@ -8,8 +8,15 @@
     "node": ">=20"
   },
   "bin": {
-    "claude": "dist/cli.mjs"
+    "claude-cli": "dist/claude-cli.mjs"
   },
+  "files": [
+    "dist/claude-cli.mjs",
+    "dist/gemini-login.mjs",
+    "dist/gemini-chat.mjs",
+    "README.md",
+    "USAGE.md"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:tsc": "tsc -p tsconfig.json --noEmit",

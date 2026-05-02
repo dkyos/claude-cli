@@ -1,5 +1,37 @@
 # 사용법
 
+## 빠른 시작 — 글로벌 설치 (권장)
+
+```sh
+git clone git@github.com:dkyos/claude-cli.git
+cd claude-cli
+npm install --legacy-peer-deps
+npm run build
+npm link              # /opt/homebrew/bin/claude-cli (또는 ~/.npm-global/bin/claude-cli) 에 심볼릭 링크 생성
+
+claude-cli login      # 1회: Google OAuth
+claude-cli            # 어느 디렉터리에서나 채팅 시작
+```
+
+해제: `npm unlink -g claude-cli-gemini-fork` (또는 저장소에서 `npm unlink`).
+
+## 명령어
+
+```
+claude-cli                      → 채팅 시작 (기본)
+claude-cli chat                 → 동일
+claude-cli login                → Google OAuth 로그인
+claude-cli logout               → 자격증명 전부 삭제
+claude-cli --help               → 도움말
+claude-cli --version            → 버전
+```
+
+채팅 옵션:
+```
+claude-cli --model gemini-2.0-flash
+claude-cli --system "You are a Korean translator."
+```
+
 ## 1. 빌드 (최초 1회)
 
 ```sh
@@ -7,12 +39,13 @@ npm install --legacy-peer-deps
 npm run build
 ```
 
-`dist/`에 3개 산출물:
+`dist/`에 4개 산출물:
 
 | 파일 | 용도 |
 |---|---|
-| `dist/gemini-login.mjs` | OAuth 로그인 (Google) |
-| `dist/gemini-chat.mjs` | **터미널 채팅 REPL** ← 주력 |
+| `dist/claude-cli.mjs` | **통합 CLI** ← `npm link` 대상 |
+| `dist/gemini-login.mjs` | OAuth 로그인 (분리 번들) |
+| `dist/gemini-chat.mjs` | 채팅 REPL (분리 번들) |
 | `dist/cli.mjs` | leaked source 전체 CLI (`--version`/`--help`만 안정) |
 
 ## 2. 인증 — 둘 중 하나 선택
@@ -42,16 +75,19 @@ node dist/gemini-login.mjs
 
 ## 3. 채팅 시작
 
+글로벌 설치 후:
+
 ```sh
-node dist/gemini-chat.mjs
+claude-cli                                      # 어디서든
+claude-cli --model gemini-2.0-flash
+claude-cli --system "You are a Korean translator."
 ```
 
-기본 모델은 `gemini-2.5-pro`. 다른 모델 지정:
+또는 빌드 디렉터리에서 직접 실행:
 
 ```sh
-node dist/gemini-chat.mjs --model gemini-2.0-flash
-node dist/gemini-chat.mjs --model gemini-2.5-flash
-node dist/gemini-chat.mjs --system "You are a Korean translator."
+node dist/claude-cli.mjs
+node dist/gemini-chat.mjs                       # 채팅만 분리된 작은 번들
 ```
 
 ## 4. REPL 안 명령어
@@ -132,5 +168,21 @@ rm ~/.gemini/oauth_creds.json && node dist/gemini-login.mjs
 ## 한 줄 요약
 
 ```sh
-echo "$YOUR_KEY" > ~/.gemini/.api_key && chmod 600 ~/.gemini/.api_key && node dist/gemini-chat.mjs
+# 글로벌 설치 + OAuth 로그인 + 채팅
+npm install --legacy-peer-deps && npm run build && npm link && claude-cli login && claude-cli
+
+# API key 모드 (OAuth 없이)
+echo "$YOUR_KEY" > ~/.gemini/.api_key && chmod 600 ~/.gemini/.api_key && claude-cli
+```
+
+## 글로벌 해제
+
+```sh
+npm unlink -g claude-cli-gemini-fork    # 심볼릭 링크 제거
+which claude-cli                         # → 빈 출력 (제거됨)
+```
+
+또는 프로젝트 디렉터리에서:
+```sh
+cd /path/to/claude-cli && npm unlink
 ```

@@ -131,3 +131,25 @@ await build({
 })
 
 console.log('built dist/gemini-chat.mjs')
+
+// Unified `claude-cli` binary — what `npm link` exposes globally.
+await build({
+  entryPoints: [resolve(root, 'scripts/claude-cli-entry.ts')],
+  outfile: resolve(root, 'dist/claude-cli.mjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node20',
+  banner: { js: '#!/usr/bin/env node\nimport { createRequire as __cr } from "module"; const require = __cr(import.meta.url);' },
+  tsconfig: resolve(root, 'tsconfig.json'),
+  logLevel: 'info',
+})
+
+// `npm link` symlinks the bin file into the global bin dir; node executes
+// it via shebang. The file needs +x perms or the OS refuses to run it.
+import { chmodSync } from 'node:fs'
+chmodSync(resolve(root, 'dist/claude-cli.mjs'), 0o755)
+chmodSync(resolve(root, 'dist/gemini-login.mjs'), 0o755)
+chmodSync(resolve(root, 'dist/gemini-chat.mjs'), 0o755)
+
+console.log('built dist/claude-cli.mjs')
