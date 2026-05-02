@@ -207,16 +207,15 @@ export async function runChat(): Promise<void> {
     currentAbort = new AbortController()
     let assistantText = ''
     try {
-      const stream = await (
+      // The adapter's `create({stream:true})` returns a thenable; awaiting it
+      // resolves directly to the AsyncIterable of stream events. (`withResponse`
+      // is for callers that also want the response headers / request_id —
+      // we don't, so awaiting the outer thenable is simpler.)
+      const stream = (await (
         adapter as unknown as {
           beta: {
             messages: {
-              create(p: unknown, o: unknown): Promise<{
-                withResponse(): Promise<{
-                  data: AsyncIterable<unknown>
-                  request_id: string
-                }>
-              }>
+              create(p: unknown, o: unknown): Promise<AsyncIterable<unknown>>
             }
           }
         }
@@ -229,11 +228,10 @@ export async function runChat(): Promise<void> {
           stream: true,
         },
         { signal: currentAbort.signal },
-      )
+      )) as AsyncIterable<unknown>
 
-      const { data } = await stream.withResponse()
       process.stdout.write('\n')
-      for await (const ev of data as AsyncIterable<{
+      for await (const ev of stream as AsyncIterable<{
         type: string
         delta?: { type?: string; text?: string }
       }>) {

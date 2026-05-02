@@ -155,15 +155,12 @@ async function run(): Promise<void> {
     currentAbort = new AbortController()
     let assistantText = ''
     try {
-      const stream = await (adapter as unknown as {
+      // The adapter's create({stream:true}) is a thenable; awaiting it
+      // resolves directly to the AsyncIterable of stream events.
+      const stream = (await (adapter as unknown as {
         beta: {
           messages: {
-            create(p: unknown, o: unknown): Promise<{
-              withResponse(): Promise<{
-                data: AsyncIterable<unknown>
-                request_id: string
-              }>
-            }>
+            create(p: unknown, o: unknown): Promise<AsyncIterable<unknown>>
           }
         }
       }).beta.messages.create(
@@ -175,11 +172,10 @@ async function run(): Promise<void> {
           stream: true,
         },
         { signal: currentAbort.signal },
-      )
+      )) as AsyncIterable<unknown>
 
-      const { data } = await stream.withResponse()
       process.stdout.write('\n')
-      for await (const ev of data as AsyncIterable<{
+      for await (const ev of stream as AsyncIterable<{
         type: string
         delta?: { type?: string; text?: string; thinking?: string }
         content_block?: { type?: string; text?: string }
